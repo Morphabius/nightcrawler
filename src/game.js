@@ -48,13 +48,13 @@ export default class GameScene extends Phaser.Scene {
     }
 
     create() {
-        this.bg = this.add.tileSprite(400, 300, 800, 600, 'bg').setScrollFactor(0);
+        this.bg = this.add.tileSprite(512, 384, 1024, 768, 'bg').setScrollFactor(0);
 
         // === PLATFORMS ===
         this.platforms = this.physics.add.staticGroup();
-        this.createNeonPlatform(400, 584, 800, 20);
-        this.createNeonPlatform(600, 440, 180, 16);
-        this.createNeonPlatform(180, 380, 220, 16);
+        this.createNeonPlatform(512, 748, 1024, 40);
+        this.createNeonPlatform(750, 550, 250, 16);
+        this.createNeonPlatform(250, 480, 250, 16);
 
         this.add.text(16, 16, 'NIGHTCRAWLER - BAMF!', {
             fontSize: '18px', fill: '#00ffff', fontStyle: 'bold'
@@ -91,12 +91,12 @@ export default class GameScene extends Phaser.Scene {
         this.playerBody.setVisible(false);
         this.playerBody.setBounce(0);
         this.playerBody.setCollideWorldBounds(true);
-        this.playerBody.body.setSize(28, 48);
-        this.playerBody.setDisplaySize(28, 48);
+        this.playerBody.body.setSize(42, 72);
+        this.playerBody.body.setOffset(0, 0); // Resetting offset as we increased size
 
         // 2) Visual sprite: NO physics, just follows the body
         this.playerVisual = this.add.sprite(100, 300, 'idle1');
-        this.playerVisual.setScale(0.8);
+        this.playerVisual.setScale(1.2);
 
         // 3) Collider between physics body and platforms
         this.physics.add.collider(this.playerBody, this.platforms);
@@ -161,7 +161,7 @@ export default class GameScene extends Phaser.Scene {
 
         // Sync visual position to physics body (bottom-aligned)
         this.playerVisual.x = this.playerBody.x;
-        this.playerVisual.y = this.playerBody.y + 24 - (this.playerVisual.displayHeight / 2) + 12;
+        this.playerVisual.y = this.playerBody.y + 36 - (this.playerVisual.displayHeight / 2) + 18;
 
         const onGround = this.isOnGround();
 
@@ -314,7 +314,7 @@ export default class GameScene extends Phaser.Scene {
             this.playerBody.x += dx;
             this.playerBody.y += dy;
             if (this.playerBody.x < 32) this.playerBody.x = 32;
-            if (this.playerBody.x > 768) this.playerBody.x = 768;
+            if (this.playerBody.x > 992) this.playerBody.x = 992;
         });
 
         this.playerVisual.once('animationcomplete', () => {
