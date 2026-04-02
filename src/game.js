@@ -21,6 +21,7 @@ export default class GameScene extends Phaser.Scene {
 
         loadSet('idle', 'idle', 8, 'idle');
         loadSet('walk', 'walk', 6, 'walk');
+        loadSet('lowered', 'lowered', 6, 'lowered');
 
         for (let i = 1; i <= 13; i++) {
             if (i === 7) continue;
@@ -83,6 +84,7 @@ export default class GameScene extends Phaser.Scene {
         createAnim('doubleJump', 'doubleJump', 3, 12, 0);
         createAnim('loweredPunch', 'loweredPunch', 2, 10, 0);
         createAnim('wallPunch', 'wallPunch', 6, 15, 0);
+        createAnim('lowered', 'lowered', 6);
         createAnim('tp', 'tp', 9, 24, 0);
 
         // === PLAYER: SEPARATE PHYSICS BODY FROM VISUAL ===
@@ -97,8 +99,7 @@ export default class GameScene extends Phaser.Scene {
         // 2) Visual sprite: NO physics, just follows the body
         this.playerVisual = this.add.sprite(100, 300, 'idle1');
         this.playerVisual.setScale(1.2);
-
-        // 3) Collider between physics body and platforms
+        this.playerVisual.setOrigin(1, 1);
         this.physics.add.collider(this.playerBody, this.platforms);
 
         // Expose a convenience reference
@@ -109,7 +110,7 @@ export default class GameScene extends Phaser.Scene {
         this.keyX = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
         this.keyC = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
         this.keyZ = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
-        
+
         // WASD Support
         this.keyW = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
         this.keyA = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
@@ -159,16 +160,26 @@ export default class GameScene extends Phaser.Scene {
 
         const isLateral = this.cursors.left.isDown || this.cursors.right.isDown || this.keyA.isDown || this.keyD.isDown;
 
-        // Sync visual position to physics body (bottom-aligned)
-        this.playerVisual.x = this.playerBody.x;
-        this.playerVisual.y = this.playerBody.y + 36 - (this.playerVisual.displayHeight / 2) + 18;
+        // Dynamic sync based on current origin
+        const pBody = this.playerBody.body;
+        const facingLeft = this.playerVisual.flipX;
+        const originX = this.playerVisual.originX;
+
+        if (originX === 0.5) {
+            this.playerVisual.x = pBody.x + pBody.halfWidth;
+        } else {
+            this.playerVisual.x = facingLeft ? pBody.x : (pBody.x + pBody.width);
+        }
+        
+        this.playerVisual.y = pBody.y + pBody.height; 
+
 
         const onGround = this.isOnGround();
 
-        if (onGround) { 
-            this.canDoubleJump = true; 
-            this.isKickDown = false; 
-            
+        if (onGround) {
+            this.canDoubleJump = true;
+            this.isKickDown = false;
+
             if (this.isAttacking) {
                 this.playerBody.setVelocityX(0);
 
@@ -197,8 +208,17 @@ export default class GameScene extends Phaser.Scene {
             } else {
                 this.playerBody.setVelocityX(0);
                 if (onGround) {
-                    if (this.cursors.up.isDown) this.playAnim('waiting');
-                    else this.playAnim('idle');
+                    if (this.cursors.up.isDown || this.keyW.isDown) {
+                        this.playAnim('waiting');
+                    } else if (this.cursors.down.isDown || this.keyS.isDown) {
+                        this.playAnim('lowered');
+                        this.playerBody.body.setSize(42, 36);
+                        this.playerBody.body.setOffset(0, 36);
+                    } else {
+                        this.playAnim('idle');
+                        this.playerBody.body.setSize(42, 72);
+                        this.playerBody.body.setOffset(0, 0);
+                    }
                 }
             }
         }
@@ -237,14 +257,14 @@ export default class GameScene extends Phaser.Scene {
     // === ATTACK ===
     handleAttack() {
         if (this.isAttacking) return;
-        
+
         const physicallyOnGround = this.playerBody.body.blocked.down || this.playerBody.body.touching.down;
-        
+
         const isLeft = this.cursors.left.isDown || this.keyA.isDown;
         const isRight = this.cursors.right.isDown || this.keyD.isDown;
         const isDown = this.cursors.down.isDown || this.keyS.isDown;
         const isUp = this.cursors.up.isDown || this.keyW.isDown;
-        
+
         const onWall = (this.playerBody.body.blocked.left || this.playerBody.body.blocked.right) && !physicallyOnGround;
 
         if (onWall) {
@@ -262,7 +282,7 @@ export default class GameScene extends Phaser.Scene {
                     this.isAttacking = true;
                     this.time.delayedCall(500, () => { this.isAttacking = false; });
                     return;
-                } 
+                }
                 if (isRight) { // Diag Right Kick
                     this.setFlip(false);
                     this.setTex('diagKick');
@@ -275,7 +295,7 @@ export default class GameScene extends Phaser.Scene {
                 this.isKickDown = true;
                 return;
             }
-            
+
             // Standard Fly Kick (Airborne, no Down held)
             if (isLeft) this.setFlip(true);
             else if (isRight) this.setFlip(false);
@@ -290,8 +310,20 @@ export default class GameScene extends Phaser.Scene {
 
     playAttack(animKey) {
         this.isAttacking = true;
+        
+        // Custom origin for specific animations
+        if (animKey === 'loweredPunch' || animKey === 'punch') {
+            this.playerVisual.setOrigin(0.5, 1);
+        } else {
+            this.playerVisual.setOrigin(1, 1);
+        }
+
         this.playAnim(animKey, false);
-        this.playerVisual.once('animationcomplete', () => { this.isAttacking = false; });
+        this.playerVisual.once('animationcomplete', () => { 
+            this.isAttacking = false; 
+            // Reset to default origin
+            this.playerVisual.setOrigin(1, 1);
+        });
     }
 
     // === TELEPORT (BAMF!) ===
