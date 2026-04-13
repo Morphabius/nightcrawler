@@ -8,6 +8,7 @@ export default class GameScene extends Phaser.Scene {
         this.canDoubleJump = true;
         this.teleportDist = 200;
         this.isKickDown = false;
+        this.intendedFlipX = false;
     }
 
     preload() {
@@ -46,6 +47,13 @@ export default class GameScene extends Phaser.Scene {
         this.load.image('diagKick', '/assets/DiagKick.png');
         this.load.image('kickDown', '/assets/KickDown.png');
         loadSet('tp', 'teleport', 9, 'a');
+        loadSet('wallgrab', 'wallgreb', 2, 'WallGrab');
+        loadSet('climbing', 'climbing', 6, 'climbing');
+        loadSet('climbDown', 'ClimbDown', 6, 'ClimbDown');
+        loadSet('roofwalk', 'RoofWalk', 6, 'RoofWalk');
+        loadSet('roofstay', 'RoofStay', 6, 'RoofStay');
+        loadSet('crawling', 'crawling', 6, 'climbing');
+
     }
 
     create() {
@@ -53,9 +61,17 @@ export default class GameScene extends Phaser.Scene {
 
         // === PLATFORMS ===
         this.platforms = this.physics.add.staticGroup();
-        this.createNeonPlatform(512, 748, 1024, 40);
-        this.createNeonPlatform(750, 550, 250, 16);
-        this.createNeonPlatform(250, 480, 250, 16);
+        this.createNeonPlatform(512, 748, 1024, 40); // Floor
+
+        // Vertical Walls
+        this.createNeonPlatform(20, 384, 40, 768);   // Left Wall
+        this.createNeonPlatform(1004, 384, 40, 768); // Right Wall
+
+        // Pillars and Small Platforms
+        this.createNeonPlatform(300, 550, 150, 16);
+        this.createNeonPlatform(724, 480, 150, 16);
+        this.createNeonPlatform(512, 250, 60, 200);  // Central Hanging Pillar
+
 
         this.add.text(16, 16, 'NIGHTCRAWLER - BAMF!', {
             fontSize: '18px', fill: '#00ffff', fontStyle: 'bold'
@@ -86,6 +102,13 @@ export default class GameScene extends Phaser.Scene {
         createAnim('wallPunch', 'wallPunch', 6, 15, 0);
         createAnim('lowered', 'lowered', 6);
         createAnim('tp', 'tp', 9, 24, 0);
+        createAnim('wallgrab', 'wallgrab', 2, 8);
+        createAnim('climbing', 'climbing', 6, 12);
+        createAnim('climbDown', 'climbDown', 6, 12);
+        createAnim('roofwalk', 'roofwalk', 6, 12);
+        createAnim('roofstay', 'roofstay', 6, 10);
+        createAnim('crawling', 'crawling', 6, 12);
+
 
         // === PLAYER: SEPARATE PHYSICS BODY FROM VISUAL ===
         // 1) Physics body: invisible rectangle, NEVER changes size
@@ -111,15 +134,12 @@ export default class GameScene extends Phaser.Scene {
         this.keyC = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
         this.keyZ = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
 
-        // WASD Support
-        this.keyW = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
-        this.keyA = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
-        this.keyS = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
-        this.keyD = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+        this.keySpace = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
         this.keyC.on('down', () => this.handleJump());
         this.keyX.on('down', () => this.handleAttack());
         this.keyZ.on('down', () => this.handleTeleport());
+        this.keySpace.on('down', () => this.handleAttack());
     }
 
     createNeonPlatform(x, y, w, h) {
@@ -158,23 +178,88 @@ export default class GameScene extends Phaser.Scene {
     update() {
         if (this.isTeleporting) return;
 
-        const isLateral = this.cursors.left.isDown || this.cursors.right.isDown || this.keyA.isDown || this.keyD.isDown;
+        // Reset angle by default (for normal walking/jumping)
+        this.playerVisual.setAngle(0);
 
-        // Dynamic sync based on current origin
+        const isL = this.cursors.left.isDown;
+        const isR = this.cursors.right.isDown;
+        const isD = this.cursors.down.isDown;
+        const isU = this.cursors.up.isDown;
+
+        // Update Direction Memory
+        if (isL) this.intendedFlipX = true;
+        else if (isR) this.intendedFlipX = false;
+
+        const isLateral = isL || isR;
+
         const pBody = this.playerBody.body;
         const facingLeft = this.playerVisual.flipX;
-        const originX = this.playerVisual.originX;
-
-        if (originX === 0.5) {
-            this.playerVisual.x = pBody.x + pBody.halfWidth;
-        } else {
-            this.playerVisual.x = facingLeft ? pBody.x : (pBody.x + pBody.width);
-        }
-        
-        this.playerVisual.y = pBody.y + pBody.height; 
-
 
         const onGround = this.isOnGround();
+        const onWall = (pBody.blocked.left || pBody.blocked.right) && !onGround;
+        let isGrabbing = false;
+        let isRoofGrabbing = false;
+
+        // Reset gravity every frame
+        pBody.setAllowGravity(true);
+
+        // 1. WALL LOGIC
+        // Also keep gravity off during WallPunch attack
+        const isWallPunching = this.isAttacking && (pBody.blocked.left || pBody.blocked.right) &&
+            (this.playerVisual.anims && this.playerVisual.anims.currentAnim && this.playerVisual.anims.currentAnim.key === 'wallPunch');
+
+        if ((onWall && !this.isAttacking) || isWallPunching) {
+            const isPushing = (pBody.blocked.left && this.cursors.left.isDown) ||
+                              (pBody.blocked.right && this.cursors.right.isDown);
+
+            // If wall punching, we stay stuck regardless of pushing keys for the duration
+            if (isPushing || isWallPunching) {
+                isGrabbing = true;
+                pBody.setAllowGravity(false);
+                this.playerBody.setVelocityY(0);
+                this.setFlip(pBody.blocked.left); // Face the wall
+
+                // FORCE CONTACT TO PREVENT FLICKERING (Stuck force)
+                this.playerBody.setVelocityX(pBody.blocked.left ? -20 : 20);
+
+                if (!isWallPunching) {
+                    if (this.cursors.up.isDown) {
+                        this.playerBody.setVelocityY(-160);
+                        this.playAnim('climbing');
+                    } else if (this.cursors.down.isDown) {
+                        this.playerBody.setVelocityY(160);
+                        this.playAnim('climbDown');
+                    } else {
+                        this.playerBody.setVelocityY(0); // Stop sliding!
+                        this.playAnim('wallgrab');
+                    }
+                }
+            }
+        }
+
+        // 2. ROOF LOGIC
+        if (pBody.blocked.up && !this.isAttacking) {
+            if (this.cursors.up.isDown) {
+                isRoofGrabbing = true;
+                pBody.setAllowGravity(false);
+                this.playerBody.setVelocityY(-50); // Keep pushing up to stay stuck
+
+                if (this.cursors.left.isDown) {
+                    this.playerBody.setVelocityX(-160);
+                    this.setFlip(true);
+                    this.playAnim('roofwalk');
+                } else if (this.cursors.right.isDown) {
+                    this.playerBody.setVelocityX(160);
+                    this.setFlip(false);
+                    this.playAnim('roofwalk');
+                } else {
+                    this.playerBody.setVelocityX(0);
+                    this.playAnim('roofstay');
+                    // No angle/flip hack needed now with specific assets
+                    this.setFlip(this.intendedFlipX);
+                }
+            }
+        }
 
         if (onGround) {
             this.canDoubleJump = true;
@@ -191,26 +276,42 @@ export default class GameScene extends Phaser.Scene {
             }
         }
         if (this.isKickDown) {
-            this.playerBody.setVelocityY(800);
+            // Constant acceleration: Increase downward velocity every frame
+            const newVy = Math.min(this.playerBody.body.velocity.y + 40, 1600);
+            this.playerBody.setVelocityY(newVy);
             this.setTex('kickDown');
-            return;
-        }
+        } else if (!this.isAttacking && !isGrabbing && !isRoofGrabbing) {
+            const isDown = isD;
+            const isLeft = isL;
+            const isRight = isR;
 
-        if (!this.isAttacking) {
-            if (this.cursors.left.isDown) {
+            if (onGround && isDown && (isLeft || isRight)) {
+                // CRAWLING LOGIC
+                const speed = 150;
+                if (isLeft) {
+                    this.playerBody.setVelocityX(-speed);
+                    this.setFlip(true);
+                } else {
+                    this.playerBody.setVelocityX(speed);
+                    this.setFlip(false);
+                }
+                this.playAnim('crawling');
+                this.playerBody.body.setSize(42, 36);
+                this.playerBody.body.setOffset(0, 36);
+            } else if (isLeft) {
                 this.playerBody.setVelocityX(-280);
                 this.setFlip(true);
                 if (onGround) this.playAnim('walk');
-            } else if (this.cursors.right.isDown) {
+            } else if (isRight) {
                 this.playerBody.setVelocityX(280);
                 this.setFlip(false);
                 if (onGround) this.playAnim('walk');
             } else {
                 this.playerBody.setVelocityX(0);
                 if (onGround) {
-                    if (this.cursors.up.isDown || this.keyW.isDown) {
+                    if (this.cursors.up.isDown) {
                         this.playAnim('waiting');
-                    } else if (this.cursors.down.isDown || this.keyS.isDown) {
+                    } else if (isDown) {
                         this.playAnim('lowered');
                         this.playerBody.body.setSize(42, 36);
                         this.playerBody.body.setOffset(0, 36);
@@ -223,25 +324,62 @@ export default class GameScene extends Phaser.Scene {
             }
         }
 
-        // Air textures
-        if (!onGround && !this.isAttacking && !this.isKickDown) {
+        if (!onGround && !this.isAttacking && !this.isKickDown && !isGrabbing && !isRoofGrabbing) {
             const vy = this.playerBody.body.velocity.y;
-            if (vy < -50) this.setTex('jumpUP');
-            else if (vy > 50) this.setTex('jumpDown');
+            if (vy < -150) this.setTex('jumpUP');
+            else if (vy > 150) this.setTex('jumpDown');
             else this.setTex('jumpStay');
+        }
+
+        // === FINAL VISUAL SYNC ===
+        const fLeft = this.playerVisual.flipX;
+        let tOriginX = fLeft ? 0 : 1;
+        const cAnim = (this.playerVisual.anims && this.playerVisual.anims.currentAnim) ? this.playerVisual.anims.currentAnim.key : null;
+        const cTex = this.playerVisual.texture.key;
+
+        if (cAnim === 'loweredPunch' || cAnim === 'punch' || cAnim === 'idle' ||
+            cTex === 'diagKick' || cTex === 'kickDown') {
+            tOriginX = 0.5;
+        }
+
+        this.playerVisual.setOrigin(tOriginX, 1);
+
+        if (tOriginX === 0.5) {
+            this.playerVisual.x = pBody.x + pBody.halfWidth;
+        } else {
+            this.playerVisual.x = fLeft ? pBody.x : (pBody.x + pBody.width);
+            if (cAnim === 'waiting') {
+                const shift = 10;
+                this.playerVisual.x += fLeft ? -shift : shift;
+            }
+        }
+
+        // Vertical sync: Feet on ground OR Top-cling on ceiling
+        if (isRoofGrabbing) {
+            this.playerVisual.y = pBody.y;
+            this.playerVisual.setOrigin(tOriginX, 0); // Anchor at the top when on ceiling
+        } else {
+            this.playerVisual.y = pBody.y + pBody.height;
+            this.playerVisual.setOrigin(tOriginX, 1); // Anchor at the bottom normally
         }
     }
 
     // === JUMP ===
     handleJump() {
         const onGround = this.isOnGround();
+        const pBody = this.playerBody.body;
         const facingLeft = this.playerVisual.flipX;
-        const isMovingBack = (facingLeft && this.cursors.right.isDown) || (!facingLeft && this.cursors.left.isDown);
+        const onWall = (pBody.blocked.left || pBody.blocked.right) && !onGround;
 
-        if (onGround && isMovingBack) {
-            this.playerBody.setVelocityY(-450);
-            this.playerBody.setVelocityX(facingLeft ? 350 : -350);
+        const isMovingBack = (facingLeft && this.cursors.right.isDown) ||
+            (!facingLeft && this.cursors.left.isDown);
+
+        // 1. JumpBack from Ground OR Wall
+        if ((onGround || onWall) && isMovingBack) {
+            this.playerBody.setVelocityY(-550);
+            this.playerBody.setVelocityX(facingLeft ? 400 : -400);
             this.playAttack('jumpBack');
+            if (onWall) this.canDoubleJump = true; // Allow mid-air jump after wall JumpBack
             return;
         }
 
@@ -260,48 +398,54 @@ export default class GameScene extends Phaser.Scene {
 
         const physicallyOnGround = this.playerBody.body.blocked.down || this.playerBody.body.touching.down;
 
-        const isLeft = this.cursors.left.isDown || this.keyA.isDown;
-        const isRight = this.cursors.right.isDown || this.keyD.isDown;
-        const isDown = this.cursors.down.isDown || this.keyS.isDown;
-        const isUp = this.cursors.up.isDown || this.keyW.isDown;
+        const isLeft = this.cursors.left.isDown;
+        const isRight = this.cursors.right.isDown;
+        const isDown = this.cursors.down.isDown;
+        const isUp = this.cursors.up.isDown;
 
         const onWall = (this.playerBody.body.blocked.left || this.playerBody.body.blocked.right) && !physicallyOnGround;
 
-        if (onWall) {
-            this.playAttack('wallPunch');
-            return;
-        }
 
         if (!physicallyOnGround) {
-            // Air logic
-            if (isDown) {
-                if (isLeft) { // Diag Left Kick
-                    this.setFlip(true);
-                    this.setTex('diagKick');
-                    this.playerBody.setVelocity(-550, 550);
-                    this.isAttacking = true;
-                    this.time.delayedCall(500, () => { this.isAttacking = false; });
-                    return;
-                }
-                if (isRight) { // Diag Right Kick
-                    this.setFlip(false);
-                    this.setTex('diagKick');
-                    this.playerBody.setVelocity(550, 550);
-                    this.isAttacking = true;
-                    this.time.delayedCall(500, () => { this.isAttacking = false; });
-                    return;
-                }
-                // Only Down = Vertical Kickdown
+            // Priority 1: Diagonal Kick (ULTRA-CLEAN)
+            const dDown = this.cursors.down.isDown;
+            const dLeft = this.cursors.left.isDown;
+            const dRight = this.cursors.right.isDown;
+
+            if (dDown && dLeft) {
+                this.isAttacking = true;
+                this.setFlip(true);
+                this.setTex('diagKick');
+                this.playerBody.setVelocity(-550, 550);
+                this.time.delayedCall(500, () => { this.isAttacking = false; });
+                return;
+            }
+            if (dDown && dRight) {
+                this.isAttacking = true;
+                this.setFlip(false);
+                this.setTex('diagKick');
+                this.playerBody.setVelocity(550, 550);
+                this.time.delayedCall(500, () => { this.isAttacking = false; });
+                return;
+            }
+
+            // Priority 2: Kickdown (Down + Attack)
+            if (dDown) {
                 this.isKickDown = true;
                 return;
             }
 
-            // Standard Fly Kick (Airborne, no Down held)
-            if (isLeft) this.setFlip(true);
-            else if (isRight) this.setFlip(false);
+            // Priority 3: Wall Punch (Facing wall in air)
+            if (onWall) {
+                this.playAttack('wallPunch');
+                return;
+            }
+
+            // Priority 4: Basic Flykick
+            this.setFlip(isLeft);
             this.playAttack('flykick');
         } else {
-            // Ground logic
+            // Ground logic (standing/crouched)
             if (isUp) this.playAttack('punchUP');
             else if (isDown) this.playAttack('loweredPunch');
             else this.playAttack('punch');
@@ -310,19 +454,9 @@ export default class GameScene extends Phaser.Scene {
 
     playAttack(animKey) {
         this.isAttacking = true;
-        
-        // Custom origin for specific animations
-        if (animKey === 'loweredPunch' || animKey === 'punch') {
-            this.playerVisual.setOrigin(0.5, 1);
-        } else {
-            this.playerVisual.setOrigin(1, 1);
-        }
-
         this.playAnim(animKey, false);
-        this.playerVisual.once('animationcomplete', () => { 
-            this.isAttacking = false; 
-            // Reset to default origin
-            this.playerVisual.setOrigin(1, 1);
+        this.playerVisual.once('animationcomplete', () => {
+            this.isAttacking = false;
         });
     }
 
@@ -334,10 +468,15 @@ export default class GameScene extends Phaser.Scene {
         this.playerBody.setVelocity(0, 0);
 
         let dx = 0, dy = 0;
-        if (this.cursors.left.isDown) dx = -this.teleportDist;
-        else if (this.cursors.right.isDown) dx = this.teleportDist;
-        if (this.cursors.up.isDown) dy = -this.teleportDist;
-        else if (this.cursors.down.isDown) dy = this.teleportDist;
+        const isL = this.cursors.left.isDown;
+        const isR = this.cursors.right.isDown;
+        const isU = this.cursors.up.isDown;
+        const isD = this.cursors.down.isDown;
+
+        if (isL) dx = -this.teleportDist;
+        else if (isR) dx = this.teleportDist;
+        if (isU) dy = -this.teleportDist;
+        else if (isD) dy = this.teleportDist;
         if (dx === 0 && dy === 0) dx = this.playerVisual.flipX ? -this.teleportDist : this.teleportDist;
 
         this.playAnim('tp', false);
