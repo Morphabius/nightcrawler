@@ -57,11 +57,18 @@ export default class GameScene extends Phaser.Scene {
     }
 
     create() {
-        this.bg = this.add.tileSprite(512, 384, 1024, 768, 'bg').setScrollFactor(0);
+        this.bg = this.add.image(0, 0, 'bg')
+            .setOrigin(0, 0)
+            .setDisplaySize(this.scale.width, this.scale.height)
+            .setScrollFactor(0);
 
         // === PLATFORMS ===
         this.platforms = this.physics.add.staticGroup();
-        this.createNeonPlatform(512, 748, 1024, 40); // Floor
+        const floorHeight = 4;
+        const floorY = this.scale.height - floorHeight / 2;
+        this.floorTop = floorY - floorHeight / 2;
+        this.createNeonPlatform(512, floorY, 1024, floorHeight); // Floor line
+        this.physics.world.setBounds(0, 0, this.scale.width, this.floorTop);
 
         // Vertical Walls
         this.createNeonPlatform(20, 384, 40, 768);   // Left Wall
@@ -145,12 +152,21 @@ export default class GameScene extends Phaser.Scene {
     createNeonPlatform(x, y, w, h) {
         const key = `neonPlat_${x}_${y}`;
         const gfx = this.make.graphics({ add: false });
-        gfx.fillStyle(0x0a0a2e, 1);
-        gfx.fillRect(0, 0, w, h);
-        gfx.fillStyle(0x00ffff, 1);
-        gfx.fillRect(0, 0, w, 3);
-        gfx.fillStyle(0xff00ff, 0.6);
-        gfx.fillRect(0, h - 2, w, 2);
+        if (h <= 4) {
+            gfx.fillStyle(0x00ffff, 1);
+            gfx.fillRect(0, 0, w, Math.max(1, h - 1));
+            if (h > 1) {
+                gfx.fillStyle(0xff00ff, 0.6);
+                gfx.fillRect(0, h - 1, w, 1);
+            }
+        } else {
+            gfx.fillStyle(0x0a0a2e, 1);
+            gfx.fillRect(0, 0, w, h);
+            gfx.fillStyle(0x00ffff, 1);
+            gfx.fillRect(0, 0, w, 3);
+            gfx.fillStyle(0xff00ff, 0.6);
+            gfx.fillRect(0, h - 2, w, 2);
+        }
         gfx.generateTexture(key, w, h);
         gfx.destroy();
         this.platforms.create(x, y, key);
@@ -482,10 +498,15 @@ export default class GameScene extends Phaser.Scene {
         this.playAnim('tp', false);
 
         this.time.delayedCall(150, () => {
-            this.playerBody.x += dx;
-            this.playerBody.y += dy;
-            if (this.playerBody.x < 32) this.playerBody.x = 32;
-            if (this.playerBody.x > 992) this.playerBody.x = 992;
+            const pBody = this.playerBody.body;
+            const bottomOffset = (pBody.offset.y - this.playerBody.displayOriginY) + pBody.height;
+            const topOffset = pBody.offset.y - this.playerBody.displayOriginY;
+            const maxY = this.floorTop - bottomOffset;
+            const minY = Math.max(-topOffset, this.playerBody.displayOriginY);
+
+            this.playerBody.x = Phaser.Math.Clamp(this.playerBody.x + dx, 32, 992);
+            this.playerBody.y = Phaser.Math.Clamp(this.playerBody.y + dy, minY, maxY);
+            pBody.updateFromGameObject();
         });
 
         this.playerVisual.once('animationcomplete', () => {
