@@ -12,11 +12,11 @@ export default class GameScene extends Phaser.Scene {
     }
 
     preload() {
-        this.load.image('bg', '/assets/bg.png');
+        this.load.image('bg', 'assets/bg.png');
 
         const loadSet = (key, path, frames, prefix) => {
             for (let i = 1; i <= frames; i++) {
-                this.load.image(`${key}${i}`, `/assets/${path}/${prefix}${i}.png`);
+                this.load.image(`${key}${i}`, `assets/${path}/${prefix}${i}.png`);
             }
         };
 
@@ -26,12 +26,12 @@ export default class GameScene extends Phaser.Scene {
 
         for (let i = 1; i <= 13; i++) {
             if (i === 7) continue;
-            this.load.image(`waiting${i}`, `/assets/waiting/waiting${i}.png`);
+            this.load.image(`waiting${i}`, `assets/waiting/waiting${i}.png`);
         }
 
-        this.load.image('jumpUP', '/assets/jump/junpUP.png');
-        this.load.image('jumpStay', '/assets/jump/junpStay.png');
-        this.load.image('jumpDown', '/assets/jump/junpDown.png');
+        this.load.image('jumpUP', 'assets/jump/junpUP.png');
+        this.load.image('jumpStay', 'assets/jump/junpStay.png');
+        this.load.image('jumpDown', 'assets/jump/junpDown.png');
 
         loadSet('punch', 'punch', 3, 'punch');
         loadSet('flykick', 'flykick', 2, 'FlyKick');
@@ -40,12 +40,12 @@ export default class GameScene extends Phaser.Scene {
         loadSet('loweredPunch', 'loweredPunch', 2, 'loweredPunch');
         loadSet('wallPunch', 'WallPunch', 6, 'WallPunch');
 
-        this.load.image('doubleJump1', '/assets/DoubleJump/1doubleJumpUP.png');
-        this.load.image('doubleJump2', '/assets/DoubleJump/2rolling.png');
-        this.load.image('doubleJump3', '/assets/DoubleJump/3doubleJumpDown.png');
+        this.load.image('doubleJump1', 'assets/DoubleJump/1doubleJumpUP.png');
+        this.load.image('doubleJump2', 'assets/DoubleJump/2rolling.png');
+        this.load.image('doubleJump3', 'assets/DoubleJump/3doubleJumpDown.png');
 
-        this.load.image('diagKick', '/assets/DiagKick.png');
-        this.load.image('kickDown', '/assets/KickDown.png');
+        this.load.image('diagKick', 'assets/DiagKick.png');
+        this.load.image('kickDown', 'assets/KickDown.png');
         loadSet('tp', 'teleport', 9, 'a');
         loadSet('wallgrab', 'wallgreb', 2, 'WallGrab');
         loadSet('climbing', 'climbing', 6, 'climbing');
