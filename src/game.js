@@ -9,6 +9,7 @@ export default class GameScene extends Phaser.Scene {
         this.teleportDist = 200;
         this.isKickDown = false;
         this.diagKickDir = 0;
+        this.diagKickSpeed = 550;
         this.lastAirAttackTime = 0;
         this.intendedFlipX = false;
     }
@@ -316,7 +317,9 @@ export default class GameScene extends Phaser.Scene {
                 this.setFlip(this.intendedFlipX);
             } else {
                 pBody.setAllowGravity(false);
-                this.playerBody.setVelocity(this.diagKickDir * 550, 550);
+                // Constant acceleration matching KickDown, keeping 45° diagonal trajectory
+                this.diagKickSpeed = Math.min(this.diagKickSpeed + 40, 1600);
+                this.playerBody.setVelocity(this.diagKickDir * this.diagKickSpeed, this.diagKickSpeed);
                 this.setFlip(false);
                 this.setTex(this.diagKickDir < 0 ? 'diagKickL' : 'diagKickR');
             }
@@ -447,10 +450,11 @@ export default class GameScene extends Phaser.Scene {
         this.isAttacking = true;
         this.lastAirAttackTime = 0;
         this.diagKickDir = dir;
+        this.diagKickSpeed = 550;
         this.intendedFlipX = dir < 0;
         this.setFlip(false);
         this.setTex(dir < 0 ? 'diagKickL' : 'diagKickR');
-        this.playerBody.setVelocity(dir * 550, 550);
+        this.playerBody.setVelocity(dir * this.diagKickSpeed, this.diagKickSpeed);
     }
 
     // === ATTACK ===
