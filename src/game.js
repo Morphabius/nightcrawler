@@ -8,6 +8,8 @@ export default class GameScene extends Phaser.Scene {
         this.canDoubleJump = true;
         this.teleportDist = 200;
         this.isKickDown = false;
+        this.diagKickDir = 0;
+        this.lastAirAttackTime = 0;
         this.intendedFlipX = false;
     }
 
@@ -44,8 +46,10 @@ export default class GameScene extends Phaser.Scene {
         this.load.image('doubleJump2', 'assets/DoubleJump/2rolling.png');
         this.load.image('doubleJump3', 'assets/DoubleJump/3doubleJumpDown.png');
 
-        this.load.image('diagKick', 'assets/DiagKick.png');
-        this.load.image('kickDown', 'assets/KickDown.png');
+        this.load.image('diagKickL', 'assets/DiagKicks/DiagKick_L.png');
+        this.load.image('diagKickR', 'assets/DiagKicks/DiagKick_R.png');
+        this.load.image('kickDown', 'assets/DownKick/KickDown.png');
+        this.load.image('downKickBounce', 'assets/DownKick/DownKick_Bounce.png');
         loadSet('tp', 'teleport', 9, 'a');
         loadSet('wallgrab', 'wallgreb', 2, 'WallGrab');
         loadSet('climbing', 'climbing', 6, 'climbing');
@@ -137,15 +141,15 @@ export default class GameScene extends Phaser.Scene {
 
         // === INPUT ===
         this.cursors = this.input.keyboard.createCursorKeys();
-        this.keyX = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
-        this.keyC = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
-        this.keyZ = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
+        this.keyA = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+        this.keyS = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
+        this.keyD = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
         this.keySpace = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-        this.keyC.on('down', () => this.handleJump());
-        this.keyX.on('down', () => this.handleAttack());
-        this.keyZ.on('down', () => this.handleTeleport());
+        this.keyD.on('down', () => this.handleJump());
+        this.keyS.on('down', () => this.handleAttack());
+        this.keyA.on('down', () => this.handleTeleport());
         this.keySpace.on('down', () => this.handleAttack());
     }
 
@@ -183,6 +187,9 @@ export default class GameScene extends Phaser.Scene {
     }
 
     setTex(key) {
+        if (this.playerVisual.anims && this.playerVisual.anims.isPlaying) {
+            this.playerVisual.anims.stop();
+        }
         this.playerVisual.setTexture(key);
     }
 
@@ -280,18 +287,40 @@ export default class GameScene extends Phaser.Scene {
         if (onGround) {
             this.canDoubleJump = true;
             this.isKickDown = false;
+            this.lastAirAttackTime = 0;
 
-            if (this.isAttacking) {
+            if (this.diagKickDir !== 0) {
+                this.diagKickDir = 0;
+                this.isAttacking = false;
                 this.playerBody.setVelocityX(0);
-
-                if (this.playerVisual.texture.key === 'diagKick') {
-                    this.isAttacking = false;
-                    if (isLateral) this.playAnim('walk');
-                    else this.playAnim('idle');
-                }
+                this.setFlip(this.intendedFlipX);
+                if (isLateral) this.playAnim('walk');
+                else this.playAnim('idle');
+            } else if (this.isAttacking) {
+                this.playerBody.setVelocityX(0);
             }
+        } else if (
+            this.diagKickDir === 0 &&
+            this.lastAirAttackTime > 0 &&
+            (this.time.now - this.lastAirAttackTime) <= 200 &&
+            isD && (isL !== isR)
+        ) {
+            this.startDiagKick(isL ? -1 : 1);
         }
-        if (this.isKickDown) {
+        if (this.diagKickDir !== 0) {
+            const hitWall = (this.diagKickDir < 0 && pBody.blocked.left) ||
+                            (this.diagKickDir > 0 && pBody.blocked.right);
+            if (hitWall) {
+                this.diagKickDir = 0;
+                this.isAttacking = false;
+                this.setFlip(this.intendedFlipX);
+            } else {
+                pBody.setAllowGravity(false);
+                this.playerBody.setVelocity(this.diagKickDir * 550, 550);
+                this.setFlip(false);
+                this.setTex(this.diagKickDir < 0 ? 'diagKickL' : 'diagKickR');
+            }
+        } else if (this.isKickDown) {
             // Constant acceleration: Increase downward velocity every frame
             const newVy = Math.min(this.playerBody.body.velocity.y + 40, 1600);
             this.playerBody.setVelocityY(newVy);
@@ -340,7 +369,7 @@ export default class GameScene extends Phaser.Scene {
             }
         }
 
-        if (!onGround && !this.isAttacking && !this.isKickDown && !isGrabbing && !isRoofGrabbing) {
+        if (!onGround && !this.isAttacking && !this.isKickDown && this.diagKickDir === 0 && !isGrabbing && !isRoofGrabbing) {
             const vy = this.playerBody.body.velocity.y;
             if (vy < -150) this.setTex('jumpUP');
             else if (vy > 150) this.setTex('jumpDown');
@@ -354,7 +383,7 @@ export default class GameScene extends Phaser.Scene {
         const cTex = this.playerVisual.texture.key;
 
         if (cAnim === 'loweredPunch' || cAnim === 'punch' || cAnim === 'idle' ||
-            cTex === 'diagKick' || cTex === 'kickDown') {
+            cTex === 'diagKickL' || cTex === 'diagKickR' || cTex === 'kickDown') {
             tOriginX = 0.5;
         }
 
@@ -402,15 +431,36 @@ export default class GameScene extends Phaser.Scene {
         if (onGround) {
             this.playerBody.setVelocityY(-650);
         } else if (this.canDoubleJump) {
+            this.diagKickDir = 0;
+            this.isKickDown = false;
+            this.lastAirAttackTime = 0;
+            this.setFlip(this.intendedFlipX);
             this.playerBody.setVelocityY(-550);
             this.canDoubleJump = false;
             this.playAttack('doubleJump');
         }
     }
 
+    startDiagKick(dir) {
+        this.playerVisual.off('animationcomplete');
+        this.isKickDown = false;
+        this.isAttacking = true;
+        this.lastAirAttackTime = 0;
+        this.diagKickDir = dir;
+        this.intendedFlipX = dir < 0;
+        this.setFlip(false);
+        this.setTex(dir < 0 ? 'diagKickL' : 'diagKickR');
+        this.playerBody.setVelocity(dir * 550, 550);
+    }
+
     // === ATTACK ===
     handleAttack() {
-        if (this.isAttacking) return;
+        const currentAnim = this.playerVisual.anims && this.playerVisual.anims.currentAnim
+            ? this.playerVisual.anims.currentAnim.key
+            : null;
+        const isJumpAnim = this.isAttacking && this.playerVisual.anims && this.playerVisual.anims.isPlaying &&
+            (currentAnim === 'doubleJump' || currentAnim === 'jumpBack');
+        if ((this.isAttacking && !isJumpAnim) || this.isKickDown || this.diagKickDir !== 0) return;
 
         const physicallyOnGround = this.playerBody.body.blocked.down || this.playerBody.body.touching.down;
 
@@ -423,30 +473,22 @@ export default class GameScene extends Phaser.Scene {
 
 
         if (!physicallyOnGround) {
-            // Priority 1: Diagonal Kick (ULTRA-CLEAN)
+            this.lastAirAttackTime = this.time.now;
+
+            // Priority 1: Diagonal Kick (Down + Left or Down + Right)
             const dDown = this.cursors.down.isDown;
             const dLeft = this.cursors.left.isDown;
             const dRight = this.cursors.right.isDown;
 
-            if (dDown && dLeft) {
-                this.isAttacking = true;
-                this.setFlip(true);
-                this.setTex('diagKick');
-                this.playerBody.setVelocity(-550, 550);
-                this.time.delayedCall(500, () => { this.isAttacking = false; });
-                return;
-            }
-            if (dDown && dRight) {
-                this.isAttacking = true;
-                this.setFlip(false);
-                this.setTex('diagKick');
-                this.playerBody.setVelocity(550, 550);
-                this.time.delayedCall(500, () => { this.isAttacking = false; });
+            if (dDown && (dLeft !== dRight)) {
+                this.startDiagKick(dLeft ? -1 : 1);
                 return;
             }
 
             // Priority 2: Kickdown (Down + Attack)
             if (dDown) {
+                this.playerVisual.off('animationcomplete');
+                this.isAttacking = false;
                 this.isKickDown = true;
                 return;
             }
@@ -469,6 +511,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     playAttack(animKey) {
+        this.playerVisual.off('animationcomplete');
         this.isAttacking = true;
         this.playAnim(animKey, false);
         this.playerVisual.once('animationcomplete', () => {
@@ -479,6 +522,12 @@ export default class GameScene extends Phaser.Scene {
     // === TELEPORT (BAMF!) ===
     handleTeleport() {
         if (this.isTeleporting) return;
+        this.playerVisual.off('animationcomplete');
+        this.diagKickDir = 0;
+        this.isKickDown = false;
+        this.lastAirAttackTime = 0;
+        this.isAttacking = false;
+        this.setFlip(this.intendedFlipX);
         this.isTeleporting = true;
         this.playerBody.body.setAllowGravity(false);
         this.playerBody.setVelocity(0, 0);
