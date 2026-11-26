@@ -12,6 +12,12 @@ export default class GameScene extends Phaser.Scene {
         this.diagKickSpeed = 550;
         this.lastAirAttackTime = 0;
         this.intendedFlipX = false;
+        this.attackId = 0;
+        this.playerMaxHp = 100;
+        this.playerHp = 100;
+        this.isHurt = false;
+        this.playerInvulnUntil = 0;
+        this.bounceUntil = 0;
     }
 
     preload() {
@@ -58,6 +64,12 @@ export default class GameScene extends Phaser.Scene {
         loadSet('roofwalk', 'RoofWalk', 6, 'RoofWalk');
         loadSet('roofstay', 'RoofStay', 6, 'RoofStay');
         loadSet('crawling', 'crawling', 6, 'climbing');
+        loadSet('damage', 'damage', 3, 'damage');
+
+        // === ENEMIES: MUMMY ===
+        this.load.image('mummyWalkSheet', 'assets/Enemies/Mummy/E1_Walking.png');
+        this.load.image('mummyAttackSheet', 'assets/Enemies/Mummy/E1_Attack.png');
+        this.load.image('mummyDeathSheet', 'assets/Enemies/Mummy/E1_death.png');
 
     }
 
@@ -87,7 +99,13 @@ export default class GameScene extends Phaser.Scene {
 
         this.add.text(16, 16, 'NIGHTCRAWLER - BAMF!', {
             fontSize: '18px', fill: '#00ffff', fontStyle: 'bold'
-        }).setScrollFactor(0);
+        }).setScrollFactor(0).setDepth(20);
+
+        this.playerHpBar = this.add.graphics().setScrollFactor(0).setDepth(20);
+        this.playerHpText = this.add.text(16, 40, 'HP 100/100', {
+            fontSize: '13px', fill: '#ffffff', fontStyle: 'bold'
+        }).setScrollFactor(0).setDepth(21);
+        this.drawPlayerHpBar();
 
         // === ANIMATIONS ===
         const createAnim = (key, framesKey, count, rate = 12, repeat = -1) => {
@@ -120,6 +138,48 @@ export default class GameScene extends Phaser.Scene {
         createAnim('roofwalk', 'roofwalk', 6, 12);
         createAnim('roofstay', 'roofstay', 6, 10);
         createAnim('crawling', 'crawling', 6, 12);
+        createAnim('damage', 'damage', 3, 10, 0);
+
+        // === MUMMY SPRITE EXTRACTION (remove solid BG + align feet) ===
+        this.createTransparentFrames('mummyWalkSheet', 'mummyWalk', [
+            { x: 0, w: 37 },
+            { x: 38, w: 34 },
+            { x: 72, w: 33 },
+            { x: 106, w: 35 },
+            { x: 142, w: 36 }
+        ], 64, 64, 44);
+
+        this.createTransparentFrames('mummyAttackSheet', 'mummyAttack', [
+            { x: 0, w: 33 },
+            { x: 34, w: 29 },
+            { x: 64, w: 31 },
+            { x: 96, w: 39 },
+            { x: 136, w: 41 }
+        ], 64, 64, 44);
+
+        this.createTransparentFrames('mummyDeathSheet', 'mummyDeath', [
+            { x: 0, w: 43 },
+            { x: 104, w: 40 },
+            { x: 204, w: 39 },
+            { x: 300, w: 42 },
+            { x: 399, w: 42 }
+        ], 64, 64, null, 60);
+
+        createAnim('mummyWalk', 'mummyWalk', 5, 7, -1);
+        createAnim('mummyAttack', 'mummyAttack', 5, 9, 0);
+        createAnim('mummyDeath', 'mummyDeath', 5, 7, 0);
+        this.anims.create({
+            key: 'mummyRise',
+            frames: [
+                { key: 'mummyDeath5' },
+                { key: 'mummyDeath4' },
+                { key: 'mummyDeath3' },
+                { key: 'mummyDeath2' },
+                { key: 'mummyDeath1' }
+            ],
+            frameRate: 7,
+            repeat: 0
+        });
 
 
         // === PLAYER: SEPARATE PHYSICS BODY FROM VISUAL ===
@@ -135,10 +195,15 @@ export default class GameScene extends Phaser.Scene {
         this.playerVisual = this.add.sprite(100, 300, 'idle1');
         this.playerVisual.setScale(1.2);
         this.playerVisual.setOrigin(1, 1);
+        this.playerVisual.setDepth(10);
         this.physics.add.collider(this.playerBody, this.platforms);
 
         // Expose a convenience reference
         this.player = this.playerBody;
+
+        // === ENEMIES ===
+        this.enemies = [];
+        this.spawnMummy(760, this.floorTop, 120, 900);
 
         // === INPUT ===
         this.cursors = this.input.keyboard.createCursorKeys();
@@ -198,9 +263,424 @@ export default class GameScene extends Phaser.Scene {
         this.playerVisual.setFlipX(flip);
     }
 
+    createTransparentFrames(sheetKey, prefix, frameRects, padW, padH, rightAnchorX = null, cropH = null) {
+        const srcImg = this.textures.get(sheetKey).getSourceImage();
+        const srcW = srcImg.width;
+        const srcH = cropH ? Math.min(cropH, srcImg.height) : srcImg.height;
+
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = srcW;
+        tmpCanvas.height = srcH;
+        const tmpCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
+        tmpCtx.drawImage(srcImg, 0, 0, srcW, srcH, 0, 0, srcW, srcH);
+
+        const imgData = tmpCtx.getImageData(0, 0, srcW, srcH);
+        const data = imgData.data;
+        const bgR = data[0];
+        const bgG = data[1];
+        const bgB = data[2];
+        const bgA = data[3];
+
+        if (bgA > 10) {
+            for (let i = 0; i < data.length; i += 4) {
+                if (
+                    Math.abs(data[i] - bgR) <= 4 &&
+                    Math.abs(data[i + 1] - bgG) <= 4 &&
+                    Math.abs(data[i + 2] - bgB) <= 4
+                ) {
+                    data[i + 3] = 0;
+                }
+            }
+            tmpCtx.putImageData(imgData, 0, 0);
+        }
+
+        frameRects.forEach((rect, idx) => {
+            const texKey = `${prefix}${idx + 1}`;
+            if (this.textures.exists(texKey)) return;
+
+            const canvasTex = this.textures.createCanvas(texKey, padW, padH);
+            const ctx = canvasTex.getContext();
+            ctx.imageSmoothingEnabled = false;
+            const destX = rightAnchorX !== null
+                ? rightAnchorX - rect.w
+                : Math.floor((padW - rect.w) / 2);
+            const destY = padH - srcH;
+            ctx.drawImage(tmpCanvas, rect.x, 0, rect.w, srcH, destX, destY, rect.w, srcH);
+            canvasTex.refresh();
+        });
+    }
+
+    drawPlayerHpBar() {
+        if (!this.playerHpBar) return;
+        const barX = 16;
+        const barY = 58;
+        const barW = 160;
+        const barH = 12;
+        const ratio = Phaser.Math.Clamp(this.playerHp / this.playerMaxHp, 0, 1);
+
+        this.playerHpBar.clear();
+        this.playerHpBar.fillStyle(0x0a0a2e, 0.85);
+        this.playerHpBar.fillRect(barX, barY, barW, barH);
+        this.playerHpBar.fillStyle(ratio > 0.35 ? 0x00ffff : 0xff2a6d, 1);
+        this.playerHpBar.fillRect(barX + 2, barY + 2, Math.round((barW - 4) * ratio), barH - 4);
+        this.playerHpBar.lineStyle(1, 0x00ffff, 0.8);
+        this.playerHpBar.strokeRect(barX, barY, barW, barH);
+
+        if (this.playerHpText) {
+            this.playerHpText.setText(`HP ${this.playerHp}/${this.playerMaxHp}`);
+        }
+    }
+
+    spawnMummy(x, y, patrolMinX, patrolMaxX) {
+        const sprite = this.physics.add.sprite(x, y, 'mummyWalk1');
+        sprite.setScale(1.6);
+        sprite.setOrigin(0.5, 1);
+        sprite.setDepth(5);
+        sprite.setBounce(0);
+        sprite.setCollideWorldBounds(true);
+        sprite.body.setSize(24, 46);
+        sprite.body.setOffset(20, 18);
+        this.physics.add.collider(sprite, this.platforms);
+
+        sprite.play('mummyWalk');
+
+        const hpBar = this.add.graphics().setDepth(9);
+
+        const enemy = {
+            sprite,
+            hpBar,
+            state: 'patrol',
+            maxHp: 100,
+            hp: 100,
+            lastHitAttackId: -1,
+            hurtUntil: 0,
+            attackHitDone: false,
+            respawnTimer: null,
+            patrolDir: -1,
+            patrolMinX,
+            patrolMaxX,
+            patrolSpeed: 70,
+            chaseSpeed: 125,
+            detectRange: 320,
+            attackRange: 85,
+            attackCooldownUntil: 0
+        };
+        this.enemies.push(enemy);
+        return enemy;
+    }
+
+    drawEnemyHpBar(enemy) {
+        enemy.hpBar.clear();
+        if (enemy.state === 'dead' || enemy.state === 'rising') return;
+
+        const body = enemy.sprite.body;
+        if (!body) return;
+
+        const barW = 48;
+        const barH = 6;
+        const barX = body.center.x - barW / 2;
+        const barY = body.top - 14;
+        const ratio = Phaser.Math.Clamp(enemy.hp / enemy.maxHp, 0, 1);
+
+        enemy.hpBar.fillStyle(0x0a0a2e, 0.85);
+        enemy.hpBar.fillRect(barX, barY, barW, barH);
+        enemy.hpBar.fillStyle(0xff2a6d, 1);
+        enemy.hpBar.fillRect(barX + 1, barY + 1, Math.round((barW - 2) * ratio), barH - 2);
+        enemy.hpBar.lineStyle(1, 0xff88aa, 0.8);
+        enemy.hpBar.strokeRect(barX, barY, barW, barH);
+    }
+
+    getPlayerAttackInfo() {
+        const pBody = this.playerBody.body;
+        const facingLeft = this.playerVisual.flipX;
+
+        if (this.diagKickDir !== 0) {
+            const x = this.diagKickDir < 0 ? pBody.left - 30 : pBody.left - 10;
+            return {
+                type: 'diagKick',
+                damage: 50,
+                rect: new Phaser.Geom.Rectangle(x, pBody.top, pBody.width + 40, pBody.height + 16)
+            };
+        }
+
+        if (this.isKickDown) {
+            return {
+                type: 'kickDown',
+                damage: 50,
+                rect: new Phaser.Geom.Rectangle(pBody.left - 12, pBody.top + 10, pBody.width + 24, pBody.height + 24)
+            };
+        }
+
+        const cAnim = (this.playerVisual.anims && this.playerVisual.anims.currentAnim)
+            ? this.playerVisual.anims.currentAnim.key
+            : null;
+        if (!this.isAttacking || !cAnim) return null;
+
+        if (cAnim === 'punchUP') {
+            const x = facingLeft ? pBody.left - 30 : pBody.left - 10;
+            return {
+                type: cAnim,
+                damage: 35,
+                rect: new Phaser.Geom.Rectangle(x, pBody.top - 48, pBody.width + 40, pBody.height + 48)
+            };
+        }
+
+        if (cAnim === 'punch' || cAnim === 'loweredPunch' || cAnim === 'flykick' || cAnim === 'wallPunch') {
+            const reach = 54;
+            const x = facingLeft ? pBody.left - reach : pBody.right - 10;
+            return {
+                type: cAnim,
+                damage: 35,
+                rect: new Phaser.Geom.Rectangle(x, pBody.top - 4, reach + 10, pBody.height + 8)
+            };
+        }
+
+        return null;
+    }
+
+    damageEnemy(enemy, damage, attackType) {
+        enemy.hp = Math.max(0, enemy.hp - damage);
+
+        if (attackType === 'kickDown') {
+            this.isKickDown = false;
+            this.canDoubleJump = true;
+            this.bounceUntil = this.time.now + 240;
+            this.playerBody.setVelocityY(-440);
+            this.setTex('downKickBounce');
+        }
+
+        if (enemy.hp <= 0) {
+            this.killEnemy(enemy);
+            return;
+        }
+
+        const sprite = enemy.sprite;
+        sprite.off('animationcomplete');
+        enemy.state = 'hurt';
+        enemy.hurtUntil = this.time.now + 200;
+        enemy.attackHitDone = false;
+
+        const knockDir = sprite.body.center.x >= this.playerBody.body.center.x ? 1 : -1;
+        sprite.setVelocityX(knockDir * 170);
+        sprite.setTint(0xff5555);
+        this.time.delayedCall(150, () => {
+            if (enemy.state !== 'dead') sprite.clearTint();
+        });
+    }
+
+    killEnemy(enemy) {
+        const sprite = enemy.sprite;
+        enemy.state = 'dead';
+        enemy.attackHitDone = false;
+        sprite.off('animationcomplete');
+        sprite.clearTint();
+        sprite.setVelocity(0, 0);
+        enemy.hpBar.clear();
+
+        sprite.play('mummyDeath', false);
+        sprite.once('animationcomplete', () => {
+            if (enemy.state === 'dead') {
+                sprite.setTexture('mummyDeath5');
+            }
+        });
+
+        if (enemy.respawnTimer) enemy.respawnTimer.remove(false);
+        enemy.respawnTimer = this.time.delayedCall(10s0s00, () => {
+            enemy.respawnTimer = null;
+            enemy.state = 'rising';
+            sprite.setVelocity(0, 0);
+            sprite.play('mummyRise', false);
+            sprite.once('animationcomplete', () => {
+                enemy.hp = enemy.maxHp;
+                enemy.lastHitAttackId = -1;
+                enemy.attackHitDone = false;
+                enemy.attackCooldownUntil = this.time.now + 500;
+                enemy.state = 'patrol';
+                sprite.play('mummyWalk', true);
+            });
+        });
+    }
+
+    damagePlayer(amount, fromX) {
+        if (this.isTeleporting || this.time.now < this.playerInvulnUntil || this.playerHp <= 0) return;
+
+        this.playerVisual.off('animationcomplete');
+        this.diagKickDir = 0;
+        this.isKickDown = false;
+        this.isAttacking = false;
+        this.lastAirAttackTime = 0;
+        this.bounceUntil = 0;
+
+        this.playerHp = Math.max(0, this.playerHp - amount);
+        this.drawPlayerHpBar();
+
+        this.isHurt = true;
+        this.playerInvulnUntil = this.time.now + 1000;
+
+        const knockDir = this.playerBody.body.center.x >= fromX ? 1 : -1;
+        this.playerBody.body.setAllowGravity(true);
+        this.playerBody.setVelocity(knockDir * 240, -260);
+        this.setFlip(knockDir < 0);
+        this.playAnim('damage', false);
+
+        this.time.delayedCall(280, () => {
+            this.isHurt = false;
+        });
+
+        if (this.playerHp <= 0) {
+            this.time.delayedCall(900, () => {
+                this.playerHp = this.playerMaxHp;
+                this.drawPlayerHpBar();
+                this.isHurt = false;
+                this.playerInvulnUntil = this.time.now + 1000;
+                this.playerBody.setPosition(100, 300);
+                this.playerBody.setVelocity(0, 0);
+                this.playerBody.body.updateFromGameObject();
+            });
+        }
+    }
+
+    updateCombat() {
+        const attackInfo = this.getPlayerAttackInfo();
+        if (!attackInfo || !this.enemies) return;
+
+        for (const enemy of this.enemies) {
+            if (enemy.state === 'dead' || enemy.state === 'rising') continue;
+            if (enemy.lastHitAttackId === this.attackId) continue;
+
+            const eBody = enemy.sprite.body;
+            if (!eBody) continue;
+
+            const enemyRect = new Phaser.Geom.Rectangle(eBody.left, eBody.top, eBody.width, eBody.height);
+            if (Phaser.Geom.Intersects.RectangleToRectangle(attackInfo.rect, enemyRect)) {
+                enemy.lastHitAttackId = this.attackId;
+                this.damageEnemy(enemy, attackInfo.damage, attackInfo.type);
+            }
+        }
+    }
+
+    updateEnemies() {
+        if (!this.enemies || this.enemies.length === 0) return;
+
+        const pBody = this.playerBody.body;
+        const playerCenterX = pBody.center.x;
+        const playerFeetY = pBody.bottom;
+        const playerRect = new Phaser.Geom.Rectangle(pBody.left, pBody.top, pBody.width, pBody.height);
+
+        for (const enemy of this.enemies) {
+            const sprite = enemy.sprite;
+            const body = sprite.body;
+            if (!body) continue;
+
+            this.drawEnemyHpBar(enemy);
+
+            if (enemy.state === 'dead' || enemy.state === 'rising') {
+                sprite.setVelocityX(0);
+                continue;
+            }
+
+            if (enemy.state === 'hurt') {
+                if (this.time.now >= enemy.hurtUntil) {
+                    enemy.state = 'patrol';
+                }
+                continue;
+            }
+
+            const dx = playerCenterX - body.center.x;
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(playerFeetY - body.bottom);
+
+            if (enemy.state === 'attack') {
+                sprite.setVelocityX(0);
+                const curTex = sprite.texture ? sprite.texture.key : null;
+                if (!enemy.attackHitDone && (curTex === 'mummyAttack4' || curTex === 'mummyAttack5')) {
+                    const facingRight = sprite.flipX;
+                    const reach = 52;
+                    const hitX = facingRight ? body.right - 8 : body.left - reach;
+                    const attackRect = new Phaser.Geom.Rectangle(hitX, body.top, reach + 8, body.height);
+                    if (Phaser.Geom.Intersects.RectangleToRectangle(attackRect, playerRect)) {
+                        enemy.attackHitDone = true;
+                        this.damagePlayer(20, body.center.x);
+                    }
+                }
+                continue;
+            }
+
+            // 1. Attack when close to the hero
+            if (absDx <= enemy.attackRange && absDy <= 90) {
+                if (absDx > 4) sprite.setFlipX(dx > 0);
+                sprite.setVelocityX(0);
+
+                if (this.time.now >= enemy.attackCooldownUntil) {
+                    enemy.state = 'attack';
+                    enemy.attackHitDone = false;
+                    sprite.off('animationcomplete');
+                    sprite.play('mummyAttack', false);
+                    sprite.once('animationcomplete', () => {
+                        if (enemy.state === 'attack') {
+                            enemy.state = 'patrol';
+                            enemy.attackHitDone = false;
+                            enemy.attackCooldownUntil = this.time.now + 350;
+                        }
+                    });
+                } else {
+                    if (sprite.anims && sprite.anims.isPlaying) sprite.anims.stop();
+                    sprite.setTexture('mummyWalk1');
+                }
+                continue;
+            }
+
+            // 2. Chase when hero is within detection range
+            if (absDx <= enemy.detectRange && absDy <= 180) {
+                enemy.state = 'chase';
+                if (absDx > 20) {
+                    const dir = dx > 0 ? 1 : -1;
+                    enemy.patrolDir = dir;
+                    sprite.setVelocityX(dir * enemy.chaseSpeed);
+                    sprite.setFlipX(dir > 0);
+                    sprite.play('mummyWalk', true);
+                } else {
+                    sprite.setVelocityX(0);
+                    if (sprite.anims && sprite.anims.isPlaying) sprite.anims.stop();
+                    sprite.setTexture('mummyWalk1');
+                }
+                continue;
+            }
+
+            // 3. Ground patrol
+            enemy.state = 'patrol';
+            if (body.blocked.left || body.center.x <= enemy.patrolMinX) {
+                enemy.patrolDir = 1;
+            } else if (body.blocked.right || body.center.x >= enemy.patrolMaxX) {
+                enemy.patrolDir = -1;
+            }
+            sprite.setVelocityX(enemy.patrolDir * enemy.patrolSpeed);
+            sprite.setFlipX(enemy.patrolDir > 0);
+            sprite.play('mummyWalk', true);
+        }
+    }
+
     // === GAME LOOP ===
     update() {
+        this.updateEnemies();
+
+        if (this.time.now < this.playerInvulnUntil) {
+            this.playerVisual.setAlpha(Math.floor(this.time.now / 70) % 2 === 0 ? 0.4 : 1);
+        } else {
+            this.playerVisual.setAlpha(1);
+        }
+
         if (this.isTeleporting) return;
+
+        if (this.isHurt) {
+            const pBody = this.playerBody.body;
+            this.playerVisual.setOrigin(0.5, 1);
+            this.playerVisual.x = pBody.x + pBody.halfWidth;
+            this.playerVisual.y = pBody.y + pBody.height;
+            return;
+        }
+
+        this.updateCombat();
 
         // Reset angle by default (for normal walking/jumping)
         this.playerVisual.setAngle(0);
@@ -234,7 +714,7 @@ export default class GameScene extends Phaser.Scene {
 
         if ((onWall && !this.isAttacking) || isWallPunching) {
             const isPushing = (pBody.blocked.left && this.cursors.left.isDown) ||
-                              (pBody.blocked.right && this.cursors.right.isDown);
+                (pBody.blocked.right && this.cursors.right.isDown);
 
             // If wall punching, we stay stuck regardless of pushing keys for the duration
             if (isPushing || isWallPunching) {
@@ -310,7 +790,7 @@ export default class GameScene extends Phaser.Scene {
         }
         if (this.diagKickDir !== 0) {
             const hitWall = (this.diagKickDir < 0 && pBody.blocked.left) ||
-                            (this.diagKickDir > 0 && pBody.blocked.right);
+                (this.diagKickDir > 0 && pBody.blocked.right);
             if (hitWall) {
                 this.diagKickDir = 0;
                 this.isAttacking = false;
@@ -373,10 +853,14 @@ export default class GameScene extends Phaser.Scene {
         }
 
         if (!onGround && !this.isAttacking && !this.isKickDown && this.diagKickDir === 0 && !isGrabbing && !isRoofGrabbing) {
-            const vy = this.playerBody.body.velocity.y;
-            if (vy < -150) this.setTex('jumpUP');
-            else if (vy > 150) this.setTex('jumpDown');
-            else this.setTex('jumpStay');
+            if (this.time.now < this.bounceUntil) {
+                this.setTex('downKickBounce');
+            } else {
+                const vy = this.playerBody.body.velocity.y;
+                if (vy < -150) this.setTex('jumpUP');
+                else if (vy > 150) this.setTex('jumpDown');
+                else this.setTex('jumpStay');
+            }
         }
 
         // === FINAL VISUAL SYNC ===
@@ -386,7 +870,7 @@ export default class GameScene extends Phaser.Scene {
         const cTex = this.playerVisual.texture.key;
 
         if (cAnim === 'loweredPunch' || cAnim === 'punch' || cAnim === 'idle' ||
-            cTex === 'diagKickL' || cTex === 'diagKickR' || cTex === 'kickDown') {
+            cTex === 'diagKickL' || cTex === 'diagKickR' || cTex === 'kickDown' || cTex === 'downKickBounce') {
             tOriginX = 0.5;
         }
 
@@ -414,6 +898,8 @@ export default class GameScene extends Phaser.Scene {
 
     // === JUMP ===
     handleJump() {
+        if (this.isHurt || this.playerHp <= 0) return;
+        this.bounceUntil = 0;
         const onGround = this.isOnGround();
         const pBody = this.playerBody.body;
         const facingLeft = this.playerVisual.flipX;
@@ -446,6 +932,8 @@ export default class GameScene extends Phaser.Scene {
 
     startDiagKick(dir) {
         this.playerVisual.off('animationcomplete');
+        this.attackId++;
+        this.bounceUntil = 0;
         this.isKickDown = false;
         this.isAttacking = true;
         this.lastAirAttackTime = 0;
@@ -459,6 +947,7 @@ export default class GameScene extends Phaser.Scene {
 
     // === ATTACK ===
     handleAttack() {
+        if (this.isHurt || this.playerHp <= 0) return;
         const currentAnim = this.playerVisual.anims && this.playerVisual.anims.currentAnim
             ? this.playerVisual.anims.currentAnim.key
             : null;
@@ -492,6 +981,8 @@ export default class GameScene extends Phaser.Scene {
             // Priority 2: Kickdown (Down + Attack)
             if (dDown) {
                 this.playerVisual.off('animationcomplete');
+                this.attackId++;
+                this.bounceUntil = 0;
                 this.isAttacking = false;
                 this.isKickDown = true;
                 return;
@@ -516,6 +1007,8 @@ export default class GameScene extends Phaser.Scene {
 
     playAttack(animKey) {
         this.playerVisual.off('animationcomplete');
+        this.attackId++;
+        this.bounceUntil = 0;
         this.isAttacking = true;
         this.playAnim(animKey, false);
         this.playerVisual.once('animationcomplete', () => {
@@ -525,11 +1018,12 @@ export default class GameScene extends Phaser.Scene {
 
     // === TELEPORT (BAMF!) ===
     handleTeleport() {
-        if (this.isTeleporting) return;
+        if (this.isTeleporting || this.isHurt || this.playerHp <= 0) return;
         this.playerVisual.off('animationcomplete');
         this.diagKickDir = 0;
         this.isKickDown = false;
         this.lastAirAttackTime = 0;
+        this.bounceUntil = 0;
         this.isAttacking = false;
         this.setFlip(this.intendedFlipX);
         this.isTeleporting = true;
