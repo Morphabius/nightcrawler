@@ -485,7 +485,7 @@ export default class GameScene extends Phaser.Scene {
         });
 
         if (enemy.respawnTimer) enemy.respawnTimer.remove(false);
-        enemy.respawnTimer = this.time.delayedCall(10s0s00, () => {
+        enemy.respawnTimer = this.time.delayedCall(10000, () => {
             enemy.respawnTimer = null;
             enemy.state = 'rising';
             sprite.setVelocity(0, 0);
